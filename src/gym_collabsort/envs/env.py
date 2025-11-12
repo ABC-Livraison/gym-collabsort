@@ -110,6 +110,7 @@ class CollabSortEnv(gym.Env):
         # Init the RNG
         super().reset(seed=seed, options=options)
 
+        self.board.reset()
         self.board.populate(rng=self.np_random)
 
         if self.render_mode == RenderMode.HUMAN:
@@ -150,6 +151,7 @@ class CollabSortEnv(gym.Env):
             "coords": np.array(object.coords),
             "color": object.color,
             "shape": object.shape.value,
+            "slot": int(object.slot)
         }
 
     def step(self, action: tuple[int, int]) -> tuple[dict, float, bool, bool, dict]:
@@ -196,6 +198,9 @@ class CollabSortEnv(gym.Env):
         # Episode is terminated when all objects have been picked up
         terminated = len(self.board.objects) == 0
 
+        #print(len(self.board.objects))
+
+        self.board.draw()
         if self.render_mode == RenderMode.HUMAN:
             self._render_frame()
 
@@ -236,7 +241,7 @@ class CollabSortEnv(gym.Env):
         if self.clock is None and self.render_mode == RenderMode.HUMAN:
             self.clock = pygame.time.Clock()
 
-        canvas = self.board.draw()
+        #canvas = self.board.draw()
 
         if self.render_mode == RenderMode.HUMAN:
             # The following line copies our drawings from canvas to the visible window

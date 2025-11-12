@@ -16,6 +16,7 @@ class Object(Sprite):
         config: Config,
         color: Color,
         shape: Shape,
+        slot: int
     ) -> None:
         super().__init__(
             coords=coords,
@@ -26,6 +27,7 @@ class Object(Sprite):
 
         self.color = color
         self.shape = shape
+        self.slot = int(slot)
 
         # Draw object on the image
         if self.shape == Shape.SQUARE:

@@ -46,6 +46,32 @@ class Board:
 
         self.agent_dropped_objects: Group[Object] = Group()
         self.robot_dropped_objects: Group[Object] = Group()
+        self._next_slot = 0
+
+
+    def reset(self):
+        self.canvas = pygame.Surface(size=self.config.window_dimensions)
+        self.objects: Group[Object] = Group()
+
+        # self.agent_arm = Arm(
+        #     coords=Vector2(
+        #         x=self.config.board_width // 2,
+        #         y=self.config.board_height - self.config.arm_base_size // 2,
+        #     ),
+        #     config=self.config,
+        # )
+        # self.robot_arm = Arm(
+        #     coords=Vector2(
+        #         x=self.config.board_width // 2,
+        #         y=self.config.arm_base_size // 2,
+        #     ),
+        #     config=self.config,
+        # )
+
+        self._next_slot = 0
+        self.agent_dropped_objects: Group[Object] = Group()
+        self.robot_dropped_objects: Group[Object] = Group()
+
 
     def populate(
         self,
@@ -76,6 +102,7 @@ class Board:
                 color=obj_color,
                 shape=obj_shape,
                 config=self.config,
+                slot=self._next_slot
             )
             if (
                 not self.agent_arm.collide_sprite(sprite=new_obj)
@@ -84,6 +111,7 @@ class Board:
             ):
                 # Add new object if it doesn't collide with anything already present on the board
                 self.objects.add(new_obj)
+                self._next_slot += 1
                 remaining_objects -= 1
 
     def get_object_at(self, coords: tuple[int, int]) -> Object | None:
@@ -92,6 +120,16 @@ class Board:
         for obj in self.objects:
             if obj.coords == coords:
                 return obj
+
+    def get_all_objects(self):
+        available_objects = [
+            obj
+            for obj in self.objects
+            if obj != self.agent_arm.picked_object
+            and obj != self.robot_arm.picked_object
+        ]
+
+        return available_objects
 
     def get_compatible_objects(
         self, colors: tuple[Color], shapes: tuple[Shape]
@@ -219,3 +257,16 @@ class Board:
         return np.transpose(
             np.array(pygame.surfarray.pixels3d(self.canvas)), axes=(1, 0, 2)
         )
+
+    def get_object_by_slot(self, slot: int) -> Object | None:
+        for obj in self.objects:
+            if getattr(obj, "slot", None) == slot:
+                return obj
+        # si l'objet a été droppé (retiré), il ne sera plus dans self.objects
+        return None
+
+    def get_slot_by_coords(self, coords: tuple[int,int]) -> int | None:
+        for obj in self.objects:
+            if tuple(obj.coords) == tuple(coords):
+                return obj.slot
+        return None
