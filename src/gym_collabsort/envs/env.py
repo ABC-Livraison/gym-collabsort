@@ -113,6 +113,15 @@ class CollabSortEnv(gym.Env):
         self.board.reset()
         self.board.populate(rng=self.np_random)
 
+        # Initialize collision tracking
+        self._total_collision_count = 0
+        self._step_collision_occurred = False
+        self._last_dropped_object = None
+
+        # Reset collision penalties on both arms
+        self.board.agent_arm.collision_penalty = False
+        self.board.robot_arm.collision_penalty = False
+
         if self.render_mode == RenderMode.HUMAN:
             self._render_frame()
 
@@ -141,11 +150,17 @@ class CollabSortEnv(gym.Env):
     def _get_info(self) -> dict:
         """Return additional information given to the agent"""
 
-        # No additional info
-        return {}
+        # Return collision information in the info dict
+        return {
+            "collision": self._step_collision_occurred,
+            "total_collisions": self._total_collision_count,
+            "collected": self._last_dropped_object is not None,
+            "collision_penalty_agent": self.board.agent_arm.collision_penalty,
+            "collision_penalty_robot": self.board.robot_arm.collision_penalty,
+        }
 
     def _get_object_props(self, object: Object) -> dict:
-        """Return properties for a aspecific object"""
+        """Return properties for a specific object"""
 
         return {
             "coords": np.array(object.coords),
@@ -155,40 +170,63 @@ class CollabSortEnv(gym.Env):
         }
 
     def step(self, action: tuple[int, int]) -> tuple[dict, float, bool, bool, dict]:
+        # Reset step collision tracking
+        self._step_collision_occurred = False
+        self._last_dropped_object = None
+
+        # Store initial collision states
+        agent_collision_before = self.board.agent_arm.collision_penalty
+        robot_collision_before = self.board.robot_arm.collision_penalty
+
         # Init reward with a small time penalty
         reward: float = self.config.reward__time_penalty
 
         # Handle robot action
-        dropped_object = self._handle_action(
+        robot_dropped_object = self._handle_action(
             arm=self.board.robot_arm,
             action=self.robot.choose_action(),
             other_arm=self.board.agent_arm,
         )
 
+        # Check if robot action caused a collision
+        robot_collision_after = self.board.robot_arm.collision_penalty
+        if robot_collision_after and not agent_collision_before:
+            self._step_collision_occurred = True
+            self._total_collision_count += 1
+
         # Compute robot reward
         reward += (
             self._compute_reward(
-                object=dropped_object,
+                object=robot_dropped_object,
                 color_rewards=self.config.robot_color_rewards,
                 shape_rewards=self.config.robot_shape_rewards,
             )
-            if dropped_object is not None
+            if robot_dropped_object is not None
             else 0
         )
 
         # Handle agent action
-        dropped_object = self._handle_action(
+        agent_dropped_object = self._handle_action(
             arm=self.board.agent_arm, action=action, other_arm=self.board.robot_arm
         )
+
+        # Check if agent action caused a collision
+        agent_collision_after = self.board.agent_arm.collision_penalty
+        if agent_collision_after and not agent_collision_before:
+            self._step_collision_occurred = True
+            self._total_collision_count += 1
+
+        # Store the last dropped object for info
+        self._last_dropped_object = agent_dropped_object
 
         # Compute agent reward
         reward += (
             self._compute_reward(
-                object=dropped_object,
+                object=agent_dropped_object,
                 color_rewards=self.config.agent_color_rewards,
                 shape_rewards=self.config.agent_shape_rewards,
             )
-            if dropped_object is not None
+            if agent_dropped_object is not None
             else 0
         )
 
@@ -197,8 +235,6 @@ class CollabSortEnv(gym.Env):
 
         # Episode is terminated when all objects have been picked up
         terminated = len(self.board.objects) == 0
-
-        #print(len(self.board.objects))
 
         self.board.draw()
         if self.render_mode == RenderMode.HUMAN:
@@ -212,9 +248,11 @@ class CollabSortEnv(gym.Env):
         """Handle an action for agent or robot arm"""
 
         target_coords = Vector2(action[0], action[1])
-        return arm.move(
+        dropped_object = arm.move(
             board=self.board, target_coords=target_coords, other_arm=other_arm
         )
+        
+        return dropped_object
 
     def _compute_reward(
         self,
