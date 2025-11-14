@@ -279,7 +279,7 @@ class CollabSortEnv(gym.Env):
         if self.clock is None and self.render_mode == RenderMode.HUMAN:
             self.clock = pygame.time.Clock()
 
-        #canvas = self.board.draw()
+        canvas = self.board.draw()
 
         if self.render_mode == RenderMode.HUMAN:
             # The following line copies our drawings from canvas to the visible window
