@@ -51,6 +51,33 @@ class Board:
         self.agent_placed_objects: Group[Object] = Group()
         self.robot_placed_objects: Group[Object] = Group()
 
+
+    def reset(self) -> None:
+        """Reset the board to its initial state"""
+        
+        # Reset canvas
+        self.canvas = pygame.Surface(size=self.config.window_dimensions)
+
+        # Reset counter
+        self.n_added_objects = 0
+
+        # Reset objects
+        self.objects = Group()
+        self.agent_placed_objects = Group()
+        self.robot_placed_objects = Group()
+
+        # Reset agent arm
+        self.agent_arm._picked_object.empty()
+        self.agent_arm.collision_penalty = False
+        self.agent_arm.gripper.location = self.agent_arm.base.location.copy()
+
+        # Reset robot arm
+        self.robot_arm._picked_object.empty()
+        self.robot_arm.collision_penalty = False
+        self.robot_arm.gripper.location = self.robot_arm.base.location.copy()
+
+
+
     def add_object(
         self,
     ) -> None:

@@ -45,6 +45,7 @@ def test_random_agent() -> None:
     env.close()
 
 
+
 def test_robotic_agent(pause_at_end: bool = False) -> None:
     """Test an agent using the same behavior as the robot, but with specific rewards"""
 
@@ -74,7 +75,43 @@ def test_robotic_agent(pause_at_end: bool = False) -> None:
 
     env.close()
 
+def test_robotic_agent_many_episodes(pause_at_end: bool = False) -> None:
+    """Test an agent using the same behavior as the robot, but with specific rewards"""
+
+    config = Config(n_objects=30)
+
+    env = CollabSortEnv(render_mode=RenderMode.HUMAN, config=config)
+    env.reset()
+        
+    # Use robot policy with agent rewards
+    robotic_agent = Robot(
+        board=env.board,
+        arm=env.board.agent_arm,
+        rewards=config.agent_rewards,
+    )
+
+    for i in range(3):
+        if i != 0:
+            env.reset(reset_board=True)
+            print("RESET")
+
+        ep_over: bool = False
+        while not ep_over:
+            _, _, terminated, truncated, _ = env.step(
+                action=robotic_agent.choose_action().value
+            )
+            ep_over = terminated or truncated
+        
+
+    if pause_at_end:
+        # Wait for any user input to exit environment
+        pygame.event.clear()
+        _ = pygame.event.wait()
+        
+    env.close()
+
 
 if __name__ == "__main__":
     # Standalone execution with pause at end
-    test_robotic_agent(pause_at_end=True)
+    #test_robotic_agent(pause_at_end=True)
+    test_robotic_agent_many_episodes(pause_at_end=True)

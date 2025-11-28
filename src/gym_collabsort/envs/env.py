@@ -118,10 +118,15 @@ class CollabSortEnv(gym.Env):
         )
 
     def reset(
-        self, *, seed: int | None = None, options: dict[str, Any] | None = None
+        self, *, seed: int | None = None, options: dict[str, Any] | None = None, reset_board: bool = False
     ) -> tuple[dict, dict]:
         # Init the RNG
         super().reset(seed=seed, options=options)
+
+        # Reset board if requested
+        if reset_board:
+            self.board.reset()
+            self.n_removed_objects = 0
 
         self.board.add_object()
 
@@ -129,7 +134,7 @@ class CollabSortEnv(gym.Env):
             self._render_frame()
 
         return (self._get_obs(), self._get_info())
-
+    
     def _get_obs(self) -> dict:
         """
         Return an observation given to the agent.
