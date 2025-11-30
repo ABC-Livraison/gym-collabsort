@@ -160,32 +160,33 @@ class CollabSortEnv(gym.Env):
         # In this case, any action chosen by the agent will not be considered
         return {"action_possible": not self.board.agent_arm.moving_back}
 
+    # In env.py - replace the current reward structure in step method
+
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
-        # Init reward
-        reward: float = self.config.step_reward
-
-        # Robot can choose an action only if it is not currently moving back to its base
-        robot_action = (
-            self.robot.choose_action()
-            if not self.robot.arm.moving_back
-            else Action.NONE
-        )
+        # Start with base step reward
+        reward = self.config.step_reward
+        
         agent_action = Action(action)
-
-        # Handle robot action
+        
+        # Check for illegal moves - trying to move down when already at base
+        if (agent_action == Action.DOWN and 
+            self.board.agent_arm.gripper.coords.row >= self.config.n_rows):
+            reward += self.config.illegal_move_penalty
+            agent_action = Action.NONE  # Cancel the illegal action
+        
+        # Robot action
+        robot_action = self.robot.choose_action() if not self.robot.arm.moving_back else Action.NONE
         collision, placed_object = self.board.robot_arm.act(
             action=robot_action,
             objects=self.board.objects,
             other_arm=self.board.agent_arm,
         )
+        
         if collision:
             reward += self.config.collision_reward
         elif placed_object is not None:
-            # Robot arm has placed an object: move it to score bar
             self._move_to_scorebar(object=placed_object, is_agent=False)
-            # Compute robot reward
             reward += placed_object.get_reward(rewards=self.config.robot_rewards)
-
             self.n_removed_objects += 1
 
         # Handle agent action
@@ -194,15 +195,24 @@ class CollabSortEnv(gym.Env):
             objects=self.board.objects,
             other_arm=self.board.robot_arm,
         )
+        
         if collision:
             reward += self.config.collision_reward
         elif placed_object is not None:
-            # Robot arm has placed an object: move it to score bar
-            self._move_to_scorebar(object=placed_object, is_agent=True)
-            # Compute robot reward
-            reward += placed_object.get_reward(rewards=self.config.agent_rewards)
-
-            self.n_removed_objects += 1
+            # Check if pick was valid (on a treadmill)
+            gripper_coords = self.board.agent_arm.gripper.coords
+            is_valid_pick = self._is_valid_pick_location(gripper_coords)
+            
+            if is_valid_pick:
+                # Valid pick - give reward and count toward completion
+                self._move_to_scorebar(object=placed_object, is_agent=True)
+                reward += self.config.successful_pick_reward + placed_object.get_reward(rewards=self.config.agent_rewards)
+                self.n_removed_objects += 1
+            else:
+                # Invalid pick - strong penalty, don't count toward completion
+                reward += self.config.invalid_pick_penalty
+                # Remove the object but don't increment counter (it's wasted)
+                self.board.objects.remove(placed_object)
 
         # Update world state
         self.n_removed_objects += self.board.animate()
@@ -210,7 +220,6 @@ class CollabSortEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        # Episode is terminated when all objects have either been placed by an arm or have fallen from a treadmill
         terminated = (
             self.n_removed_objects >= self.config.n_objects
             and self.board.agent_arm.picked_object is None
@@ -221,6 +230,14 @@ class CollabSortEnv(gym.Env):
             self._render_frame()
 
         return observation, reward, terminated, False, info
+
+    def _is_valid_pick_location(self, gripper_coords) -> bool:
+        """Check if the gripper is at a valid location to pick an object."""
+        treadmill_rows = {
+            self.config.upper_treadmill_row,
+            self.config.lower_treadmill_row
+        }
+        return gripper_coords.row in treadmill_rows
 
     def _move_to_scorebar(self, object: Object, is_agent=True) -> None:
         """Move a placed object to the agent or robot score bar"""

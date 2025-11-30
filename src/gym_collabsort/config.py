@@ -144,13 +144,12 @@ class Config:
     arm_gripper_size: int = board_cell_size // 2
 
     # ---------- Rewards ----------
-
-    # Base step reward
-    step_reward: float = 0
-
-    # Reward when a collision happens
-    collision_reward: float = -50
-
+    step_reward: float = -0.1            # Small cost for each step
+    collision_reward: float = -10.0      # Keep collision penalty
+    invalid_pick_penalty: float = -5.0   # Stronger penalty for invalid picks
+    illegal_move_penalty: float = -2.0   # Penalty for impossible moves
+    successful_pick_reward: float = 10.0 # Clear reward for valid picks
+        
     @property
     def agent_rewards(self) -> np.ndarray[np.float64]:
         """Return the rewards array associated to object properties for the agent"""
