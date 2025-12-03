@@ -65,12 +65,15 @@ class CollabSortEnv(gym.Env):
             rewards=config.robot_rewards,
         )
 
-        # Number of remaining time steps in penalty mode
-        self.remaining_penalty_steps: int = 0
-
         # Number of removed objects: placed by any arm or fallen from any treadmill.
         # Used to assess the end of episode
         self.n_removed_objects: int = 0
+
+        # Total rewards for the agent and robot
+        self.cumulative_agent_rewards: float = 0
+        self.cumulative_robot_rewards: float = 0
+
+        self.total_steps: int = 0
 
         # Define action format
         self.action_space = gym.spaces.Discrete(len(Action))
@@ -105,7 +108,6 @@ class CollabSortEnv(gym.Env):
                     self.config.n_cols,
                 ]
             ),
-            dtype=int,
         )
 
     @property
@@ -118,15 +120,17 @@ class CollabSortEnv(gym.Env):
         )
 
     def reset(
-        self, *, seed: int | None = None, options: dict[str, Any] | None = None, reset_board: bool = False
+    self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[dict, dict]:
         # Init the RNG
         super().reset(seed=seed, options=options)
 
-        # Reset board if requested
-        if reset_board:
-            self.board.reset()
-            self.n_removed_objects = 0
+        # Reset the entire board
+        self.board.reset()
+        
+        self.n_removed_objects = 0
+        self.cumulative_agent_rewards = 0
+        self.cumulative_robot_rewards = 0
 
         self.board.add_object()
 
@@ -134,7 +138,7 @@ class CollabSortEnv(gym.Env):
             self._render_frame()
 
         return (self._get_obs(), self._get_info())
-    
+
     def _get_obs(self) -> dict:
         """
         Return an observation given to the agent.
@@ -161,76 +165,87 @@ class CollabSortEnv(gym.Env):
         return {"action_possible": not self.board.agent_arm.moving_back}
 
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
-        # Init reward
-        reward: float = self.config.step_reward
+        # Init step reward for agent and robot
+        agent_reward: float = self.config.step_reward
+        robot_reward: float = self.config.step_reward
+        
+        # Increment total training steps (across all episodes)
+        self.total_steps += 1
+        
+        # Get dynamic rewards for current training step
+        current_agent_rewards = self.config.get_agent_rewards_for_step(self.total_steps)
+        current_robot_rewards = self.config.get_robot_rewards_for_step(self.total_steps)
+        
+        # Update robot with current rewards
+        self.robot.rewards = current_robot_rewards
 
+        # Apply robot action.
         # Robot can choose an action only if it is not currently moving back to its base
         robot_action = (
             self.robot.choose_action()
             if not self.robot.arm.moving_back
             else Action.NONE
         )
-        agent_action = Action(action)
-        
-        # === IMPROVED ILLEGAL ACTION HANDLING ===
-        # Convert illegal actions to safe alternatives instead of NONE
-        current_row = self.board.agent_arm.gripper.coords.row
-        
-        if agent_action == Action.DOWN and current_row >= self.config.n_rows:
-            # At bottom, move up instead
-            reward += self.config.illegal_move_penalty
-            agent_action = Action.UP
-        
-        elif agent_action == Action.UP and current_row <= 1:
-            # At top, move down instead
-            reward += self.config.illegal_move_penalty
-            agent_action = Action.DOWN
-        
-        
-        
-        # Handle robot action
-        collision, placed_object = self.board.robot_arm.act(
-            action=robot_action,
-            objects=self.board.objects,
-            other_arm=self.board.agent_arm,
+        robot_collision, robot_placed_object, robot_picked_object = (
+            self.board.robot_arm.act(
+                action=robot_action,
+                objects=self.board.objects,
+                other_arm=self.board.agent_arm,
+            )
         )
-        if collision:
-            reward += self.config.collision_reward
-        elif placed_object is not None:
-            self._move_to_scorebar(object=placed_object, is_agent=False)
-            reward += placed_object.get_reward(rewards=self.config.robot_rewards)
-            self.n_removed_objects += 1
 
-        # Handle agent action
-        collision, placed_object = self.board.agent_arm.act(
-            action=agent_action,
-            objects=self.board.objects,
-            other_arm=self.board.robot_arm,
+        # Apply agent action
+        agent_action = Action(action)
+        agent_collision, agent_placed_object, agent_picked_object = (
+            self.board.agent_arm.act(
+                action=agent_action,
+                objects=self.board.objects,
+                other_arm=self.board.robot_arm,
+            )
         )
-        
-        if collision:
-            reward += self.config.collision_reward
-        elif placed_object is not None:
-            self._move_to_scorebar(object=placed_object, is_agent=True)
-            object_reward = placed_object.get_reward(rewards=self.config.agent_rewards)
-            reward += object_reward + self.config.successful_pick_bonus
-            self.n_removed_objects += 1
-        
-        # === NEW: DENSE REWARDS FOR GUIDANCE ===
-        """if not collision and placed_object is None:  # No collision or successful pick
-            # Reward for being on correct row when object passes
-            current_row = self.board.agent_arm.gripper.coords.row
-            if current_row in [self.config.upper_treadmill_row, self.config.lower_treadmill_row]:
-                # Check if any object is on this treadmill
-                for obj in self.board.objects:
-                    if obj.coords.row == current_row:
-                        # Object is on same treadmill row!
-                        reward += 0.1  # Small reward for positioning
-                        break"""
-        
-        missed_count = self.board.animate()
-        reward += missed_count * self.config.missed_object_penalty
-        self.n_removed_objects += missed_count
+
+        # Compute movement penalties
+        if robot_action in (Action.UP, Action.DOWN):
+            robot_reward += self.config.movement_penalty
+        if agent_action in (Action.UP, Action.DOWN):
+            agent_reward += self.config.movement_penalty
+
+        # Handle collisions, placed and picked objects (if any)
+        if robot_collision or agent_collision:
+            # Immediatly drop any picked object in case of a collision
+            self.board.robot_arm._picked_object.empty()
+            self.board.agent_arm._picked_object.empty()
+
+            # Compute negative rewards for the collision
+            agent_reward += self.config.collision_penalty
+            robot_reward += self.config.collision_penalty
+        else:
+            if robot_placed_object is not None:
+                # Robot arm has placed an object: move it to score bar
+                self._move_to_scorebar(object=robot_placed_object, is_agent=False)
+                # Increment number of objects removed from the board
+                self.n_removed_objects += 1
+            elif robot_picked_object is not None:
+                # Compute robot reward using dynamic rewards
+                robot_reward += robot_picked_object.get_reward(
+                    rewards=current_robot_rewards  # Use dynamic rewards
+                )
+
+            if agent_placed_object is not None:
+                # Agent arm has placed an object: move it to score bar
+                self._move_to_scorebar(object=agent_placed_object, is_agent=True)
+                # Increment number of objects removed from the board
+                self.n_removed_objects += 1
+            elif agent_picked_object is not None:
+                # Compute agent reward using dynamic rewards
+                agent_reward += agent_picked_object.get_reward(
+                    rewards=current_agent_rewards  # Use dynamic rewards
+                )
+
+        # Update world state
+        self.n_removed_objects += self.board.animate()
+        self.cumulative_agent_rewards += agent_reward
+        self.cumulative_robot_rewards += robot_reward
 
         observation = self._get_obs()
         info = self._get_info()
@@ -245,15 +260,7 @@ class CollabSortEnv(gym.Env):
         if self.render_mode == RenderMode.HUMAN:
             self._render_frame()
 
-        return observation, reward, terminated, False, info
-    
-    def _is_valid_pick_location(self, gripper_coords) -> bool:
-        """Check if the gripper is at a valid location to pick an object."""
-        treadmill_rows = {
-            self.config.upper_treadmill_row,
-            self.config.lower_treadmill_row
-        }
-        return gripper_coords.row in treadmill_rows
+        return observation, agent_reward, terminated, False, info
 
     def _move_to_scorebar(self, object: Object, is_agent=True) -> None:
         """Move a placed object to the agent or robot score bar"""
@@ -289,8 +296,26 @@ class CollabSortEnv(gym.Env):
 
     def _render_frame(self) -> np.ndarray | None:
         """Render the current state of the environment as a frame"""
+        # Get current scale for info display
+        current_scale = self.config.get_current_reward_scale(self.total_steps)
 
-        canvas = self.board.draw(collision_penalty=self.collision_penalty)
+        canvas = self.board.draw(
+            agent_reward=self.cumulative_agent_rewards,
+            robot_reward=self.cumulative_robot_rewards,
+            collision_penalty=self.collision_penalty,
+        )
+
+
+        # Only add scale info in HUMAN mode
+        if self.render_mode == RenderMode.HUMAN:
+            # Get current scale for info display
+            current_scale = self.config.get_current_reward_scale(self.total_steps)
+            
+            # Create font if window exists (Pygame is initialized)
+            if self.window is not None:
+                font = pygame.font.Font(None, 24)
+                scale_text = font.render(f"Reward Scale: {current_scale:.2f}x", True, (0, 0, 0))
+                canvas.blit(scale_text, (self.config.board_width - 200, 10))
 
         if self.render_mode == RenderMode.HUMAN:
             if self.window is None:

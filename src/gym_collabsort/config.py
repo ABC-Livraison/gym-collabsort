@@ -109,7 +109,7 @@ class Config:
 
     # ---------- Treadmills ----------
 
-    # Board row for the upper treadmill
+    # Board row for the uppoer treadmill
     upper_treadmill_row = 4
 
     # Board row for the lower treadmill
@@ -142,26 +142,68 @@ class Config:
 
     # Size (height & width) of the agent and robot grippers in pixels
     arm_gripper_size: int = board_cell_size // 2
-
-    # ---------- Rewards ----------
-    step_reward: float = 0                  # Keep original
-    collision_reward: float = -1.0          # Keep original
-    missed_object_penalty: float = -0.5     # Keep original
-    illegal_move_penalty: float = -0.5      # Reduced from -10
-    successful_pick_bonus: float = 5.0      # Increase from 1.0 to make picking worthwhile
-    return_to_base_bonus: float = 0.5       # Bonus for returning to base with object
     
+    # ========== Exploration parameters ==========
+    initial_exploration_temp: float = 1.0      # Start: 10:1 ratio
+    final_exploration_temp: float = 0.3        # End: 3:1 ratio  
+    exploration_decay_steps: int = 100000
+    
+    # ========== Rewards ==========
+    # Base step reward
+    step_reward: float = 0
 
+    # Negative reward when a collision happens
+    collision_penalty: float = -10
+
+    # Negative reward for movement
+    movement_penalty = -1
+
+    # Original pick-up rewards
+    _agent_raw_rewards = np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
+    _robot_raw_rewards = np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
+    
+    BASE_REWARD_SCALE: float = 10.0  # Renamed for clarity
+    
+    sum_rewards = abs(movement_penalty) + abs(collision_penalty)
+    movement_penalty = (movement_penalty/sum_rewards)
+    collision_penalty = (collision_penalty/sum_rewards)
+    
+    def get_exploration_factor(self, step: int) -> float:
+        """Get current exploration factor (like temperature)"""
+        if step >= self.exploration_decay_steps:
+            return self.final_exploration_temp
+        
+        decay = step / self.exploration_decay_steps
+        return (self.initial_exploration_temp * (1 - decay) + 
+                self.final_exploration_temp * decay)
+    
+    def get_current_reward_scale(self, step: int) -> float:
+        """Get reward scale for current training step"""
+        return self.BASE_REWARD_SCALE * self.get_exploration_factor(step)
+    
+    def get_agent_rewards_for_step(self, step: int) -> np.ndarray:
+        """Get agent rewards scaled for current training step"""
+        original_rewards = np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
+        sum_abs_rewards = np.sum(np.abs(original_rewards))
+        current_scale = self.get_current_reward_scale(step)
+        return (original_rewards / sum_abs_rewards) * current_scale
+    
+    def get_robot_rewards_for_step(self, step: int) -> np.ndarray:
+        """Get robot rewards scaled for current training step"""
+        original_rewards = np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
+        sum_abs_rewards = np.sum(np.abs(original_rewards))
+        current_scale = self.get_current_reward_scale(step)
+        return (original_rewards / sum_abs_rewards) * current_scale
+    
     @property
-    def agent_rewards(self) -> np.ndarray[np.float64]:
-        """Return the rewards array associated to object properties for the agent"""
-
-        # Rows are indiced by object color, columns by object shape
-        return np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
-
+    def agent_rewards(self) -> np.ndarray:
+        """Base agent rewards (used when no step info available)"""
+        return self.get_agent_rewards_for_step(0)  # Default to full scale
+    
     @property
-    def robot_rewards(self) -> np.ndarray[np.float64]:
-        """Return the rewards array associated to object properties for the robot"""
-
-        # Rows are indiced by object color, columns by object shape
-        return np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
+    def robot_rewards(self) -> np.ndarray:
+        """Base robot rewards (used when no step info available)"""
+        return self.get_robot_rewards_for_step(0)  # Default to full scale
+    
+    # Size in pixels of reward texts
+    reward_text_size: int = 16

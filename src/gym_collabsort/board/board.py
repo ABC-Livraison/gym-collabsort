@@ -4,6 +4,7 @@ The environment board and its content.
 
 import numpy as np
 import pygame
+import pygame.freetype as freetype
 from pygame.math import Vector2
 from pygame.sprite import Group
 
@@ -22,6 +23,11 @@ class Board:
 
         self.rng = rng
         self.config = config
+
+        # Init the reward rendering objects
+        pygame.freetype.init()
+        self.agent_reward_text = freetype.Font(None)
+        self.robot_reward_text = freetype.Font(None)
 
         # Define the surface to draw upon
         self.canvas = pygame.Surface(size=self.config.window_dimensions)
@@ -51,33 +57,6 @@ class Board:
         self.agent_placed_objects: Group[Object] = Group()
         self.robot_placed_objects: Group[Object] = Group()
 
-
-    def reset(self) -> None:
-        """Reset the board to its initial state"""
-        
-        # Reset canvas
-        self.canvas = pygame.Surface(size=self.config.window_dimensions)
-
-        # Reset counter
-        self.n_added_objects = 0
-
-        # Reset objects
-        self.objects = Group()
-        self.agent_placed_objects = Group()
-        self.robot_placed_objects = Group()
-
-        # Reset agent arm
-        self.agent_arm._picked_object.empty()
-        self.agent_arm.collision_penalty = False
-        self.agent_arm.gripper.location = self.agent_arm.base.location.copy()
-
-        # Reset robot arm
-        self.robot_arm._picked_object.empty()
-        self.robot_arm.collision_penalty = False
-        self.robot_arm.gripper.location = self.robot_arm.base.location.copy()
-
-
-
     def add_object(
         self,
     ) -> None:
@@ -94,8 +73,8 @@ class Board:
             ) * self.config.board_cell_size
 
         # Randomly generate object attributes
-        obj_color: Color = self.rng.choice(Color)
-        obj_shape: Shape = self.rng.choice(Shape)
+        obj_color: Color = self.rng.choice(list(Color))
+        obj_shape: Shape = self.rng.choice(list(Shape))
 
         new_obj = Object(
             location=Vector2(
@@ -147,7 +126,12 @@ class Board:
 
         return n_fallen_objects
 
-    def draw(self, collision_penalty: bool = False) -> pygame.Surface:
+    def draw(
+        self,
+        agent_reward: float = 0,
+        robot_reward: float = 0,
+        collision_penalty: bool = False,
+    ) -> pygame.Surface:
         """Draw the board"""
 
         # fill the surface with background color to wipe away anything previously drawed
@@ -232,6 +216,32 @@ class Board:
             width=self.config.arm_line_thickness,
         )
 
+        # Display robot reward
+        self.robot_reward_text.render_to(
+            self.canvas,
+            # Display reward to the left of agent arm base
+            dest=(
+                10,
+                self.config.scorebar_height + self.config.board_cell_size // 3,
+            ),
+            text=f"Rewards: {robot_reward:.0f}",
+            size=self.config.reward_text_size,
+        )
+
+        # Display agent reward
+        self.agent_reward_text.render_to(
+            self.canvas,
+            # Display reward to the left of agent arm base
+            dest=(
+                10,
+                self.config.board_height
+                + self.config.scorebar_height
+                - self.config.board_cell_size // 2,
+            ),
+            text=f"Rewards: {agent_reward:.0f}",
+            size=self.config.reward_text_size,
+        )
+
         return self.canvas
 
     def get_frame(self) -> np.ndarray:
@@ -240,3 +250,27 @@ class Board:
         return np.transpose(
             np.array(pygame.surfarray.pixels3d(self.canvas)), axes=(1, 0, 2)
         )
+    
+    def reset(self) -> None:
+        """Reset the board to its initial state"""
+        
+        # Reset canvas
+        self.canvas = pygame.Surface(size=self.config.window_dimensions)
+
+        # Reset counter
+        self.n_added_objects = 0
+
+        # Reset objects
+        self.objects = Group()
+        self.agent_placed_objects = Group()
+        self.robot_placed_objects = Group()
+
+        # Reset agent arm
+        self.agent_arm._picked_object.empty()
+        self.agent_arm.collision_penalty = False
+        self.agent_arm.gripper.location_abs = self.agent_arm.base.location_abs
+
+        # Reset robot arm
+        self.robot_arm._picked_object.empty()
+        self.robot_arm.collision_penalty = False
+        self.robot_arm.gripper.location_abs = self.robot_arm.base.location_abs

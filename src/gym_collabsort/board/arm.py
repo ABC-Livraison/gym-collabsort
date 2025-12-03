@@ -134,28 +134,43 @@ class Arm:
         action: Action,
         objects: Group[Object],
         other_arm: Arm,
-    ) -> tuple[bool, Object | None]:
+    ) -> tuple[bool, Object | None, Object | None]:
         """
-        Handle the chosen action for the arm.
-        Return collision status and the placed object if movement ends in arm base with a picket object
+        Handle the chosen action for the arm. Return:
+        - collision status
+        - the placed object if movement ends in arm base with a picked object
+        - the picked object if arm gripper successfully picks an object
         """
+
+        # Defaults for returned values
+        collision: bool = False
+        placed_object: Object | None = None
+        picked_object: Object | None = None
 
         if self.moving_back:
-            # Move back arm gripper to its base in order to place the picked object
+            # Move back arm gripper to its base automatically
             if self.gripper.coords.row > self.base.coords.row:
                 # Moving back the robot arm gripper to its base
-                return self._move(row_offset=-1, objects=objects, other_arm=other_arm)
+                collision, placed_object = self._move(
+                    row_offset=-1, objects=objects, other_arm=other_arm
+                )
             elif self.gripper.coords.row < self.base.coords.row:
                 # Moving back the agent arm gripper to its base
-                return self._move(row_offset=1, objects=objects, other_arm=other_arm)
+                collision, placed_object = self._move(
+                    row_offset=1, objects=objects, other_arm=other_arm
+                )
 
         if action == Action.UP:
-            # Move the gripper up
-            return self._move(row_offset=-1, objects=objects, other_arm=other_arm)
+            # Move the gripper up (no possible object placement)
+            collision, _ = self._move(
+                row_offset=-1, objects=objects, other_arm=other_arm
+            )
 
         elif action == Action.DOWN:
-            # Move the gripper down
-            return self._move(row_offset=1, objects=objects, other_arm=other_arm)
+            # Move the gripper down (no possible object placement)
+            collision, _ = self._move(
+                row_offset=1, objects=objects, other_arm=other_arm
+            )
 
         elif action == Action.PICK:
             # Only check for a pickable object if no object has already been picked
@@ -167,33 +182,39 @@ class Arm:
                 # Only one object may be at the same location as the arm gripper
                 if len(pickable_objects) == 1:
                     # Pick object at current location
-                    self._picked_object.add(pickable_objects[0])
+                    picked_object = pickable_objects[0]
+                    self._picked_object.add(picked_object)
 
-        # No movement
-        return False, None
+        return collision, placed_object, picked_object
 
     def _move(
         self, row_offset: int, objects: Group[Object], other_arm: Arm
     ) -> tuple[bool, Object | None]:
         """
         Move the arm gripper vertically (up if row offset is negative, down otherwise).
-        Return collision status and the placed object if movement ends in arm base with a picket object
+        Return collision status and the placed object if movement ends in arm base with a picked object
         """
 
+        collision: bool = False
         placed_object: Object | None = None
 
         # Move arm gripper
         self.gripper.move(row_offset=row_offset)
 
         if self.picked_object is not None:
-            # Move the picked object alongside gripper.
-            # (Should not happen with an efficient arm, but theorically possible)
+            # Move the picked object alongside gripper
             self.picked_object.move(row_offset=row_offset)
 
         if self.collide_arm(arm=other_arm):
+            collision = True
+
             # Change collision penalty status (both grippers will move back to their base)
             self.collision_penalty = True
             other_arm.collision_penalty = True
+
+            if other_arm.picked_object is not None:
+                # Drop any object picked by the other arm just before this collision
+                other_arm._picked_object.empty()
 
         if self.is_retracted():
             # Gripper is back to its base: cancel collision penalty (if any)
@@ -207,7 +228,7 @@ class Arm:
                 self._picked_object.remove(placed_object)
                 objects.remove(placed_object)
 
-        return self.collision_penalty, placed_object
+        return collision, placed_object
 
     def is_retracted(self) -> bool:
         """Check if the arm is entirely retracted (gripper has returned to base)"""
