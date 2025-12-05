@@ -162,7 +162,7 @@ class Config:
     _agent_raw_rewards = np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
     _robot_raw_rewards = np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
     
-    BASE_REWARD_SCALE: float = 10.0  # Renamed for clarity
+    BASE_REWARD_SCALE: float = 20.0  # Renamed for clarity
     
     sum_rewards = abs(movement_penalty) + abs(collision_penalty)
     movement_penalty = (movement_penalty/sum_rewards)
