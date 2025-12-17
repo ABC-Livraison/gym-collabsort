@@ -1,9 +1,10 @@
 """
-Base types and configuration values.
+Base types and configuration values for gym-collabsort environment.
 """
 
 import math
 from dataclasses import dataclass
+from typing import Tuple
 from enum import Enum
 
 import numpy as np
@@ -52,6 +53,13 @@ class Action(Enum):
 @dataclass
 class Config:
     """Configuration class with default values"""
+    
+    # ---------- Reward Scaling Parameters ----------
+    # alpha: scale factor for rewards (Theorem 5.1)
+    reward_alpha: float = 1.0
+    
+    # beta: offset for rewards
+    reward_beta: float = 0.0
 
     # Frames Per Second for environment rendering
     render_fps: int = 5
@@ -109,7 +117,7 @@ class Config:
 
     # ---------- Treadmills ----------
 
-    # Board row for the uppoer treadmill
+    # Board row for the upper treadmill
     upper_treadmill_row = 4
 
     # Board row for the lower treadmill
@@ -142,13 +150,9 @@ class Config:
 
     # Size (height & width) of the agent and robot grippers in pixels
     arm_gripper_size: int = board_cell_size // 2
-    
-    # ========== Exploration parameters ==========
-    initial_exploration_temp: float = 1.0      # Start: 10:1 ratio
-    final_exploration_temp: float = 0.3        # End: 3:1 ratio  
-    exploration_decay_steps: int = 100000
-    
-    # ========== Rewards ==========
+
+    # ---------- Rewards ----------
+
     # Base step reward
     step_reward: float = 0
 
@@ -158,52 +162,45 @@ class Config:
     # Negative reward for movement
     movement_penalty = -1
 
-    # Original pick-up rewards
-    _agent_raw_rewards = np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
-    _robot_raw_rewards = np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
-    
-    BASE_REWARD_SCALE: float = 20.0  # Renamed for clarity
-    
-    sum_rewards = abs(movement_penalty) + abs(collision_penalty)
-    movement_penalty = (movement_penalty/sum_rewards)
-    collision_penalty = (collision_penalty/sum_rewards)
-    
-    def get_exploration_factor(self, step: int) -> float:
-        """Get current exploration factor (like temperature)"""
-        if step >= self.exploration_decay_steps:
-            return self.final_exploration_temp
-        
-        decay = step / self.exploration_decay_steps
-        return (self.initial_exploration_temp * (1 - decay) + 
-                self.final_exploration_temp * decay)
-    
-    def get_current_reward_scale(self, step: int) -> float:
-        """Get reward scale for current training step"""
-        return self.BASE_REWARD_SCALE * self.get_exploration_factor(step)
-    
-    def get_agent_rewards_for_step(self, step: int) -> np.ndarray:
-        """Get agent rewards scaled for current training step"""
-        original_rewards = np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
-        sum_abs_rewards = np.sum(np.abs(original_rewards))
-        current_scale = self.get_current_reward_scale(step)
-        return (original_rewards / sum_abs_rewards) * current_scale
-    
-    def get_robot_rewards_for_step(self, step: int) -> np.ndarray:
-        """Get robot rewards scaled for current training step"""
-        original_rewards = np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
-        sum_abs_rewards = np.sum(np.abs(original_rewards))
-        current_scale = self.get_current_reward_scale(step)
-        return (original_rewards / sum_abs_rewards) * current_scale
-    
+    # Negative reward for NONE action (Theorem 1.1: makes inaction less attractive)
+    none_penalty: float = -0.05
+
+    # Base reward matrices (before alpha/beta scaling)
+    @property
+    def base_agent_rewards(self) -> np.ndarray:
+        """Base rewards for agent (before alpha/beta scaling)"""
+        return np.array([[8, 7, 6], [5, 4, 3], [2, 1, 0]])
+
+    @property
+    def base_robot_rewards(self) -> np.ndarray:
+        """Base rewards for robot (before alpha/beta scaling)"""
+        return np.array([[5, 4, 3], [8, 7, 6], [2, 1, 0]])
+
     @property
     def agent_rewards(self) -> np.ndarray:
-        """Base agent rewards (used when no step info available)"""
-        return self.get_agent_rewards_for_step(0)  # Default to full scale
-    
+        """Return scaled rewards with alpha and beta applied"""
+        base = self.base_agent_rewards
+        # Apply scaling: R' = α * R + β
+        scaled = self.reward_alpha * base + self.reward_beta
+        return scaled
+
     @property
     def robot_rewards(self) -> np.ndarray:
-        """Base robot rewards (used when no step info available)"""
-        return self.get_robot_rewards_for_step(0)  # Default to full scale
-    
+        """Return scaled rewards with alpha and beta applied"""
+        base = self.base_robot_rewards
+        # Apply scaling: R' = α * R + β
+        scaled = self.reward_alpha * base + self.reward_beta
+        return scaled
+
     # Size in pixels of reward texts
     reward_text_size: int = 16
+    
+    def copy_with_alpha_beta(self, alpha: float = None, beta: float = None) -> 'Config':
+        """Create a copy of the config with new alpha/beta values"""
+        import copy
+        new_config = copy.deepcopy(self)
+        if alpha is not None:
+            new_config.reward_alpha = alpha
+        if beta is not None:
+            new_config.reward_beta = beta
+        return new_config
