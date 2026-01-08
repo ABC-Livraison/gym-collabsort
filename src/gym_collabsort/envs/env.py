@@ -62,6 +62,7 @@ class CollabSortEnv(gym.Env):
         self.cumulative_agent_rewards: float = 0
         self.cumulative_robot_rewards: float = 0
         self.total_steps: int = 0
+        self.cumulative_penalty: float = 0  # Track penalty separately
 
         # Define action format
         self.action_space = gym.spaces.Discrete(len(Action))
@@ -112,6 +113,7 @@ class CollabSortEnv(gym.Env):
         self.n_removed_objects = 0
         self.cumulative_agent_rewards = 0
         self.cumulative_robot_rewards = 0
+        self.cumulative_penalty = 0
         self.total_steps = 0
 
         # Reset robot rewards (using current alpha/beta)
@@ -143,8 +145,19 @@ class CollabSortEnv(gym.Env):
             "collected": self.board.agent_arm.picked_object is not None or self.board.robot_arm.picked_object is not None,
             "agent_reward_total": self.cumulative_agent_rewards,
             "robot_reward_total": self.cumulative_robot_rewards,
+            "penalty_total": self.cumulative_penalty,
             "alpha": self.config.reward_alpha,
             "beta": self.config.reward_beta,
+            "config": {
+                "reward_alpha": self.config.reward_alpha,
+                "reward_beta": self.config.reward_beta,
+                "step_reward": self.config.step_reward,
+                "collision_penalty": self.config.collision_penalty,
+                "movement_penalty": self.config.movement_penalty,
+                "none_penalty": self.config.none_penalty,
+                "base_agent_rewards": self.config.base_agent_rewards.tolist(),
+                "base_robot_rewards": self.config.base_robot_rewards.tolist(),
+            }
         }
 
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
@@ -152,6 +165,13 @@ class CollabSortEnv(gym.Env):
         # Init step reward for agent and robot
         agent_reward: float = self.config.step_reward
         robot_reward: float = self.config.step_reward
+        
+        # Calculate base rewards (before alpha/beta scaling)
+        base_agent_reward: float = self.config.step_reward
+        base_robot_reward: float = self.config.step_reward
+        
+        # Track penalties for this step
+        penalty_this_step = 0.0
         
         # Increment total steps
         self.total_steps += 1
@@ -183,8 +203,12 @@ class CollabSortEnv(gym.Env):
         # Calculate movement penalties
         if robot_action in (Action.UP, Action.DOWN):
             robot_reward += self.config.movement_penalty
+            base_robot_reward += self.config.movement_penalty
+            penalty_this_step += self.config.movement_penalty
         if agent_action in (Action.UP, Action.DOWN):
             agent_reward += self.config.movement_penalty
+            base_agent_reward += self.config.movement_penalty
+            penalty_this_step += self.config.movement_penalty
 
         # Handle collisions
         if robot_collision or agent_collision:
@@ -193,6 +217,9 @@ class CollabSortEnv(gym.Env):
 
             agent_reward += self.config.collision_penalty
             robot_reward += self.config.collision_penalty
+            base_agent_reward += self.config.collision_penalty
+            base_robot_reward += self.config.collision_penalty
+            penalty_this_step += self.config.collision_penalty
         else:
             # Handle successful picks/places with alpha/beta scaled rewards
             if robot_placed_object is not None:
@@ -200,30 +227,54 @@ class CollabSortEnv(gym.Env):
                 self.n_removed_objects += 1
             elif robot_picked_object is not None:
                 # Get scaled reward using current alpha/beta
-                robot_reward += robot_picked_object.get_reward(
+                scaled_reward = robot_picked_object.get_reward(
                     rewards=self.config.robot_rewards
                 )
+                robot_reward += scaled_reward
+                
+                # Calculate base reward (with alpha=1, beta=0)
+                base_reward = robot_picked_object.get_reward(
+                    rewards=self.config.base_robot_rewards
+                )
+                base_robot_reward += base_reward
 
             if agent_placed_object is not None:
                 self._move_to_scorebar(object=agent_placed_object, is_agent=True)
                 self.n_removed_objects += 1
             elif agent_picked_object is not None:
                 # Get scaled reward using current alpha/beta
-                agent_reward += agent_picked_object.get_reward(
+                scaled_reward = agent_picked_object.get_reward(
                     rewards=self.config.agent_rewards
                 )
+                agent_reward += scaled_reward
+                
+                # Calculate base reward (with alpha=1, beta=0)
+                base_reward = agent_picked_object.get_reward(
+                    rewards=self.config.base_agent_rewards
+                )
+                base_agent_reward += base_reward
 
         # Apply none penalty
         if agent_action == Action.NONE:
             agent_reward += self.config.none_penalty
+            base_agent_reward += self.config.none_penalty
+            penalty_this_step += self.config.none_penalty
 
         # Update world state
         self.n_removed_objects += self.board.animate()
         self.cumulative_agent_rewards += agent_reward
         self.cumulative_robot_rewards += robot_reward
+        self.cumulative_penalty += penalty_this_step
 
         observation = self._get_obs()
         info = self._get_info()
+        
+        # Add step-specific info
+        info.update({
+            "penalty_this_step": penalty_this_step,
+            "base_agent_reward_this_step": base_agent_reward,
+            "base_robot_reward_this_step": base_robot_reward,
+        })
 
         # Check termination
         terminated = (
